@@ -301,6 +301,7 @@ orbs:
                 # Usually CHECKOUT_KEY & CHECKOUT_KEY_PUBLIC are provided by CircleCI,
                 # but in some cases when I want my own keys (e.g. I want to fetch multiple repos),
                 # then it can by done by providing SSH_PRIVATE_KEY_B64 and SSH_PUBLIC_KEY_B64
+                SSH_PRIVATE_KEY=
                 if (: "${SSH_PRIVATE_KEY_B64?}") 2>/dev/null; then
                   printf "%s\n" "- found env var SSH_PRIVATE_KEY_B64"
                   SSH_PRIVATE_KEY="$(echo "${SSH_PRIVATE_KEY_B64}" | base64 -d)"
@@ -320,7 +321,7 @@ orbs:
                   printf "${RED}%s${NC}\n" "Private key not provided"
                   exit 1
                 fi
-
+                SSH_PUBLIC_KEY=
                 if (: "${SSH_PUBLIC_KEY_B64?}") 2>/dev/null; then
                   printf "%s\n" "- found env var SSH_PUBLIC_KEY_B64"
                   SSH_PUBLIC_KEY="$(echo "${SSH_PUBLIC_KEY_B64}" | base64 -d)"
