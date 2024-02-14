@@ -1,5 +1,6 @@
 version: 2.1
 orbs:
+  bats: circleci/bats@1.1.0
   common-commands:
     commands:
       git_checkout:
@@ -23,11 +24,12 @@ orbs:
         # Similar issue: https://github.com/CircleCI-Public/circleci-cli/issues/330
         steps:
           - run:
-              name: "Checkout"
+              name: "Checkout OLD"
               environment:
                 LFS_ENABLED: <<parameters.lfs>>
                 SUBMODULES_ENABLED: <<parameters.submodules>>
               command: |
+                set -x
                 YELLOW=$(printf '\033[33m')
                 RESET=$(printf '\033[m')
 
@@ -137,163 +139,325 @@ orbs:
                   setup_ssh
                   repo_checkout <<parameters.dest>>
                 fi
-      install_babashka:
+
+      clone_git_repo:
+        description: |
+          Clones Git repo.
         parameters:
-          install_dir:
+          debug:
+            default: false
+            description: Flag to run the script in debug mode.
+            type: boolean
+          dest_dir:
+            default: ~/code
+            description: Destination where the repository is saved
             type: string
-            default: ~/bin
-          repo_dir:
+          lfs:
+            default: false
+            description: Clone with support for Git LFS
+            type: boolean
+          name_displayed:
+            default: rynkowsg-org/clone_git_repo
+            description: Command name.
             type: string
-            default: .
-        description: "Install Babashka"
+          repo_branch:
+            default: ""
+            description: The branch to checkout. If not provided, it takes the value of CIRCLE_BRANCH.
+            type: string
+          repo_sha1:
+            default: ""
+            description: The SHA1 to checkout. If not provided, it takes the value of CIRCLE_SHA1.
+            type: string
+          repo_tag:
+            default: ""
+            description: The tag to checkout. If not provided, it takes the value of CIRCLE_TAG.
+            type: string
+          repo_url:
+            default: ""
+            description: URL to the repository. If not provided, it takes the value of CIRCLE_REPOSITORY_URL.
+            type: string
+          submodules:
+            default: false
+            description: Clone including submodules
+            type: boolean
         steps:
           - run:
-              name: "Install Babashka"
+              name: <<parameters.name_displayed>>
+              environment:
+                DEBUG: <<parameters.debug>>
+                DEST_DIR: <<parameters.dest_dir>>
+                LFS_ENABLED: <<parameters.lfs>>
+                REPO_BRANCH: <<parameters.repo_branch>>
+                REPO_SHA1: <<parameters.repo_sha1>>
+                REPO_TAG: <<parameters.repo_tag>>
+                REPO_URL: <<parameters.repo_url>>
+                SUBMODULES_ENABLED: <<parameters.submodules>>
               command: |
-                <<parameters.repo_dir>>/projects/ci/scripts/install_babashka.bash <<parameters.install_dir>>
-                bb --version
-      install_clj-kondo:
-        parameters:
-          install_dir:
-            type: string
-            default: ~/bin
-          repo_dir:
-            type: string
-            default: .
-        description: "Install clj-kondo"
-        steps:
-          - run:
-              name: "Install clj-kondo"
-              command: |
-                <<parameters.repo_dir>>/projects/ci/scripts/install_clj-kondo.bash <<parameters.install_dir>>
-                clj-kondo --version
-      install_yq:
-        parameters:
-          install_dir:
-            type: string
-            default: ~/bin
-          repo_dir:
-            type: string
-            default: .
-        description: "Install yq"
-        steps:
-          - run:
-              name: "Install yq"
-              command: |
-                <<parameters.repo_dir>>/projects/ci/scripts/install_yq.bash <<parameters.install_dir>>
-                yq --version
-      cache_restore:
-        parameters:
-          project_yml_path:
-            type: string
-            default: .circleci/project.yml
-          checksum_file:
-            type: string
-            default: /tmp/checksum.txt
-          repo_dir:
-            type: string
-            default: .
-        steps:
-          - run:
-              name: Generate cache key
-              command: <<parameters.repo_dir>>/projects/ci/scripts/make_combined_checksum_file.bash -c=<<parameters.project_yml_path>> -o=<<parameters.checksum_file>>
-          - restore_cache:
-              key: deps-{{ checksum "<<parameters.checksum_file>>" }}
-      cache_save:
-        parameters:
-          project_yml_path:
-            type: string
-            default: .circleci/project.yml
-          checksum_file:
-            type: string
-            default: /tmp/checksum.txt
-        steps:
-          - save_cache:
-              paths: [~/.gitlibs, ~/.m2/repository, .cpcache]
-              key: deps-{{ checksum "<<parameters.checksum_file>>" }}
-      restore_secrets:
-        steps:
-          - run:
-              name: Restore secrets
-              command: |
-                YELLOW=$(printf '\033[33m')
-                RESET=$(printf '\033[m')
-                # credentials at ~/.m2/settings.xml
-                if [[ -n "${M2_SETTINGS_B64}" ]]; then
-                  echo "${M2_SETTINGS_B64}" | base64 -d >> ~/.m2/settings.xml
-                  printf "${YELLOW}%s${RESET}\n" "Restored ~/.m2/settings.xml"
+                #!/bin/bash
+
+                ###
+                # Clones git repository.
+                #
+                # Example with defaults:
+                #
+                #   ./src/scripts/clone_repo.bash
+                #
+                # Example with params specified:
+                #
+                #  ./src/scripts/clone_repo.bash
+                #
+                ###
+
+                set -euo pipefail
+
+                #################################################
+                #             ENVIRONMENT VARIABLES             #
+                #################################################
+
+                DEBUG=${DEBUG:-0}
+                [ "${DEBUG}" = 1 ] && set -x
+
+                # Variables specified by CircleCI:
+                # - CHECKOUT_KEY - private key
+                # - CHECKOUT_KEY_PUBLIC - public key
+                # - CIRCLE_BRANCH - branch specified by CircleCI
+                # - CIRCLE_REPOSITORY_URL
+                # - CIRCLE_SHA1 - SHA specified by CircleCI
+                # - CIRCLE_TAG - tag specified by CircleCI
+
+                # repo coordinates, if not specified takes coordinates from CircleCI variables
+                REPO_URL=${REPO_URL:-${CIRCLE_REPOSITORY_URL:-}}
+                REPO_TAG=${REPO_TAG:-${CIRCLE_TAG:-}}
+                REPO_BRANCH=${REPO_BRANCH:-${CIRCLE_BRANCH:-}}
+                REPO_SHA1=${REPO_SHA1:-${CIRCLE_SHA1:-}}
+                # If run from CircleCI, variables CIRCLE_REPOSITORY_URL and CIRCLE_SHA1 is
+                # always provided, while CIRCLE_TAG and CIRCLE_BRANCH are depend on whether
+                # the build is triggered by a tag or a branch, respectively..
+
+                #DEST_DIR - destination for repo, if not provided checks out in CWD
+                DEST_DIR=${DEST_DIR:-.}
+
+                # SUBMODULES_ENABLED - submodules support, if not specified, set to false
+                SUBMODULES_ENABLED=${SUBMODULES_ENABLED:-0}
+
+                # SUBMODULES_ENABLED - Git LFS support, if not specified, set to false
+                LFS_ENABLED=${LFS_ENABLED:-0}
+
+                SSH_CONFIG_DIR="${SSH_CONFIG_DIR:-}"
+                SSH_PRIVATE_KEY_PATH="${SSH_PRIVATE_KEY_PATH:-}"
+                SSH_PUBLIC_KEY_PATH="${SSH_PUBLIC_KEY_PATH:-}"
+
+                #SSH_PRIVATE_KEY_B64 - SSH private key encoded in Base64 (optional), provided by context
+                #SSH_PUBLIC_KEY_B64 - SSH public key encoded in Base64 (optional)), provided by context
+
+                #################################################
+                #                    COLORS                     #
+                #################################################
+
+                GREEN=$(printf '\033[32m')
+                RED=$(printf '\033[31m')
+                #YELLOW=$(printf '\033[33m')
+                NC=$(printf '\033[0m')
+
+                #################################################
+                #      ENVIRONMENT VARIABLES - VALIDATION       #
+                #################################################
+
+                if [ -z "${REPO_BRANCH}" ] && [ -z "${REPO_TAG}" ]; then
+                  printf "${RED}%s${NC}\n" "Missing coordinates to clone the repository: either REPO_BRANCH or REPO_TAG is required."
+                  exit 1
                 fi
-      # When CircleCI is run locally with mounting repository instead of fetching it,
-      # there are problems with permissions when  accessing `.cpcache` directories.
-      # Idea here is to remove all cache directories on workflow start and create
-      # empty once with right permissions. Then remove all on workflow finish.
-      local_execute_establish_setup:
-        steps:
-          - run:
-              # This CI_RUN_LOCALLY is set by me in bb.edn when I run CircleCI
-              # locally with mounting repository instead of fetching it.
-              # It is a workaround to avoid permissions issues with accessing .cpcache directories.
-              name: "local execute: establish setup"
-              command: |
-                YELLOW=$(printf '\033[33m')
-                RESET=$(printf '\033[m')
-                if [[ "${CI_RUN_LOCALLY}" == "true" ]]; then
-                  printf "${YELLOW}%s${RESET}\n" "local execute: setup..."
-                  # re-create all .cpcache directories
-                  find . -name deps.edn | while read deps_file; do
-                     cpcache_dir="$(dirname "${deps_file}")/.cpcache"
-                     sudo rm -rfv "${cpcache_dir}"
-                     sudo mkdir "${cpcache_dir}"
-                     sudo chmod 755 "${cpcache_dir}"
-                     sudo chown -Rv $(whoami) "${cpcache_dir}"
-                  done
-                  # re-create .clj-kondo/cache directory
-                  find . -name .clj-kondo | while read cljkondo_dir; do
-                     cache_dir="${cljkondo_dir}/.cache"
-                     sudo rm -rfv "${cache_dir}"
-                     sudo mkdir -v "${cache_dir}"
-                     sudo chmod -v 755 "${cache_dir}"
-                     sudo chown -Rv $(whoami) "${cache_dir}"
-                  done
-                  # re-create .clerk directory
-                  find . -name .clerk | while read clerk_dir; do
-                     sudo rm -rfv "${clerk_dir}"
-                     sudo mkdir -v "${clerk_dir}"
-                     sudo chmod -v 755 "${clerk_dir}"
-                     sudo chown -Rv $(whoami) "${clerk_dir}"
-                  done
-                  printf "${YELLOW}%s${RESET}\n" "local execute: setup... DONE"
+                if [ -z "${REPO_SHA1}" ]; then
+                  printf "${RED}%s${NC}\n" "Missing coordinates to clone the repository: REPO_SHA1 is always required."
+                  exit 1
+                fi
+
+                if [ -z "${SSH_CONFIG_DIR}" ]; then
+                #  SSH_CONFIG_DIR="$(mktemp -d -t "clone_git_repo-ssh-$(date +%Y%m%d_%H%M%S)-XXX")"
+                  # shellcheck disable=SC2064
+                #  trap "rm -rf \"${SSH_CONFIG_DIR}\"" EXIT
+                  SSH_CONFIG_DIR=~/.ssh
+                fi
+
+                # Note:
+                # Usually CHECKOUT_KEY & CHECKOUT_KEY_PUBLIC are provided by CircleCI,
+                # but in some cases when I want my own keys (e.g. I want to fetch multiple repos),
+                # then it can by done by providing SSH_PRIVATE_KEY_B64 and SSH_PUBLIC_KEY_B64
+                if (: "${SSH_PRIVATE_KEY_B64?}") 2>/dev/null; then
+                  printf "%s\n" "- found env var SSH_PRIVATE_KEY_B64"
+                  SSH_PRIVATE_KEY="$(echo "${SSH_PRIVATE_KEY_B64}" | base64 -d)"
+                elif [ -n "${SSH_PRIVATE_KEY_PATH}" ]; then
+                  SSH_PRIVATE_KEY="$(cat "${SSH_PRIVATE_KEY_PATH}")"
+                  printf "%s\n" "- SSH_PRIVATE_KEY read from SSH_PRIVATE_KEY_PATH"
+                elif [ -f ~/.ssh/id_rsa ]; then
+                  SSH_PRIVATE_KEY="$(cat ~/.ssh/id_rsa)"
+                  printf "%s\n" "- SSH_PRIVATE_KEY read from ~/.ssh/id_rsa"
+                elif [ -n "${CHECKOUT_KEY:-}" ]; then
+                  SSH_PRIVATE_KEY="${CHECKOUT_KEY:-}"
+                  printf "%s\n" "- SSH_PRIVATE_KEY set to CHECKOUT_KEY"
                 else
-                  printf "${YELLOW}%s${RESET}\n" "It is not locally executed job. Nothing to do."
+                  printf "${RED}%s${NC}\n" "Private key not provided"
+                  exit 1
                 fi
-      local_execute_teardown_setup:
+
+                if (: "${SSH_PUBLIC_KEY_B64?}") 2>/dev/null; then
+                  printf "%s\n" "- found env var SSH_PUBLIC_KEY_B64"
+                  SSH_PUBLIC_KEY="$(echo "${SSH_PUBLIC_KEY_B64}" | base64 -d)"
+                elif [ -n "${SSH_PUBLIC_KEY_PATH}" ]; then
+                  SSH_PUBLIC_KEY="$(cat "${SSH_PUBLIC_KEY_PATH}")"
+                  printf "%s\n" "- SSH_PUBLIC_KEY read from SSH_PUBLIC_KEY_PATH"
+                elif [ -f ~/.ssh/id_rsa.pub ]; then
+                  SSH_PUBLIC_KEY="$(cat ~/.ssh/id_rsa.pub)"
+                  printf "%s\n" "- SSH_PUBLIC_KEY read from ~/.ssh/id_rsa.pub"
+                elif [ -n "${CHECKOUT_KEY_PUBLIC:-}" ]; then
+                  SSH_PUBLIC_KEY="${CHECKOUT_KEY_PUBLIC:-}"
+                  printf "%s\n" "- SSH_PUBLIC_KEY set to CHECKOUT_KEY_PUBLIC"
+                else
+                  printf "${RED}%s${NC}\n" "Public key not provided"
+                  exit 1
+                fi
+
+                #################################################
+                #                   UTILITIES                   #
+                #################################################
+
+                function install_git_lfs {
+                  if ! which git-lfs >/dev/null; then
+                    printf "${GREEN}%s${NC}\n" "Installing Git LFS..."
+                    curl -sSL https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
+                    sudo apt-get install -y git-lfs
+                    printf "${GREEN}%s${NC}\n\n" "Installing Git LFS... DONE"
+                  fi
+                }
+
+                function setup_ssh {
+                  printf "${GREEN}%s${NC}\n" "Setting up SSH..."
+                  # --- create SSH dir
+                  printf "${GREEN}%s${NC}\n" "Setting up SSH... ${SSH_CONFIG_DIR}"
+                  mkdir -p "${SSH_CONFIG_DIR}"
+                  chmod 0700 "${SSH_CONFIG_DIR}"
+                  # --- create known_hosts
+                  local known_hosts="${SSH_CONFIG_DIR}/known_hosts"
+                  printf "${GREEN}%s${NC}\n" "Setting up SSH... ${known_hosts}"
+                  # Current fingerprints: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
+                  {
+                    printf "%s\n" "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+                    printf "%s\n" "github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg="
+                    printf "%s\n" "github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk="
+                  } >>"${known_hosts}"
+                  # alternatively we could just use: ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+                  chmod 0600 "${known_hosts}"
+                  # --- create id_rsa
+                  local private_key_path=
+                  if [ -n "${SSH_PRIVATE_KEY}" ]; then
+                    private_key_path="${SSH_CONFIG_DIR}/id_rsa"
+                    printf "${GREEN}%s${NC}\n" "Setting up SSH... ${private_key_path}"
+                    printf "%s\n" "${SSH_PRIVATE_KEY}" >"${private_key_path}"
+                    chmod 0600 "${private_key_path}"
+                  fi
+                  # --- create id_rsa.pub (it's not necessary though)
+                  local public_key_path=
+                  if [ -n "${SSH_PUBLIC_KEY}" ]; then
+                    public_key_path="${SSH_CONFIG_DIR}/id_rsa.pub"
+                    printf "${GREEN}%s${NC}\n" "Setting up SSH... ${public_key_path}"
+                    printf "%s" "${SSH_PUBLIC_KEY}" >"${public_key_path}"
+                  fi
+                  eval "$(ssh-agent -s)"
+                  ssh-add "${SSH_CONFIG_DIR}/id_rsa"
+                  # point out the private key and known_hosts (alternative to use config file)
+                #  git_ssh_command="$(printf "ssh%s%s" \
+                #    " -v" \
+                #     " -o UserKnownHostsFile=\"${known_hosts}\""
+                #  )"
+                    #    "$( [ -n "${private_key_path}" ] && echo " -i \"${private_key_path}\"" || echo "" )"
+                  cat "${known_hosts}"
+                #  export GIT_SSH_COMMAND="${git_ssh_command}"
+                  # use git+ssh instead of https
+                #  git config --global url."ssh://git@github.com".insteadOf "https://github.com" || true
+                #  git config --global gc.auto 0 || true
+                  printf "${GREEN}%s${NC}\n" "Setting up SSH... DONE"
+                  printf "%s\n" ""
+                  # --- validate
+                  printf "${GREEN}%s${NC}\n" "Validating GitHub authentication..."
+                  ssh -T git@github.com || true
+                  printf "%s\n" ""
+                }
+
+                # $1 - dest
+                function repo_checkout {
+                  local -r dest="${1}"
+                  # To facilitate cloning shallow repo for branch, tag or particular sha,
+                  # we don't use `git clone`, but combination of `git init` & `git fetch`.
+                  printf "${GREEN}%s${NC}\n" "Creating clean git repo..."
+                  printf "%s\n" "- src: ${REPO_URL}"
+                  printf "%s\n" "- dst: ${dest}"
+                  printf "%s\n" ""
+                  mkdir -p "${dest}"
+                  if [ "$(ls -A "${dest}")" ]; then
+                      printf "${RED}%s${NC}\n" "Directory \"${dest}\" is not empty."
+                      exit 1
+                  fi
+                  cd "${dest}"
+                  # Skip smudge to download binary files later in a faster batch
+                  git config --global init.defaultBranch master
+                  [ "${LFS_ENABLED}" = 1 ] && git lfs install --skip-smudge
+                  git init
+                  git remote add origin "${REPO_URL}"
+                  [ "${LFS_ENABLED}" = 1 ] && git lfs install --local --skip-smudge
+                  printf "%s\n" ""
+                  if [ -n "${REPO_TAG+x}" ] && [ -n "${REPO_TAG}" ]; then
+                    printf "${GREEN}%s${NC}\n" "Fetching & checking out tag..."
+                    git fetch --depth 1 origin "${REPO_TAG}"
+                    git checkout --force "${REPO_TAG}"
+                    git reset --hard "${REPO_SHA1}"
+                  elif [ -n "${REPO_BRANCH+x}" ] && [ -n "${REPO_BRANCH}" ] && [ -n "${REPO_SHA1+x}" ] && [ -n "${REPO_SHA1}" ]; then
+                    printf "${GREEN}%s${NC}\n" "Fetching & checking out branch..."
+                    git fetch --depth 1 origin "${REPO_BRANCH}"
+                    git checkout --force -B "${REPO_BRANCH}" "${REPO_SHA1}"
+                  else
+                    printf "${RED}%s${NC}\n" "Missing coordinates to clone the repository."
+                    printf "${RED}%s${NC}\n" "Need to specify REPO_TAG to fetch by tag or REPO_BRANCH and REPO_SHA1 to fetch by branch."
+                    exit 1
+                  fi
+                  [ "${SUBMODULES_ENABLED}" = 1 ] && git submodule update --init --recursive --depth=1
+                  [ "${LFS_ENABLED}" = 1 ] && GIT_TRACE=1 git lfs pull
+                  printf "%s\n" ""
+                  printf "${GREEN}%s${NC}\n" "Summary"
+                  git --no-pager log --no-color -n 1 --format="HEAD is now at %h %s"
+                }
+
+                #################################################
+                #                     MAIN                      #
+                #################################################
+
+                main() {
+                  # omit checkout when code already exist (e.g. mounted locally with -v param)
+                  if [ ! -e "${HOME}/code/.git" ]; then
+                    [ "${LFS_ENABLED}" = 1 ] && install_git_lfs
+                    setup_ssh
+                    repo_checkout "${DEST_DIR}"
+                  fi
+                }
+
+                # shellcheck disable=SC2199
+                # to disable warning about concatenation of BASH_SOURCE[@]
+                # It is not a problem. This part pf condition is only to prevent `unbound variable` error.
+                if [[ -n "${BASH_SOURCE[@]}" && "${BASH_SOURCE[0]}" != "${0}" ]]; then
+                  [[ -n "${BASH_SOURCE[0]}" ]] && printf "%s\n" "Loaded: ${BASH_SOURCE[0]}"
+                else
+                  main "$@"
+                fi
+
+      print_content:
         steps:
           - run:
-              # I want to run it even if the workflow fails
-              when: always
-              name: "local execute: teardown setup"
+              name: Print repo content
               command: |
-                YELLOW=$(printf '\033[33m')
-                RESET=$(printf '\033[m')
-                if [[ "${CI_RUN_LOCALLY}" == "true" ]]; then
-                  printf "${YELLOW}%s${RESET}\n" "local execute: cleanup..."
-                  # delete .clj-kondo/cache directory
-                  find . -name .clj-kondo | while read cljkondo_dir; do
-                    cache_dir="${cljkondo_dir}/.cache"
-                    sudo rm -rfv "${cache_dir}"
-                  done
-                  # delete all .cpcache directories
-                  find . -name .cpcache | while read cpcache_dir; do
-                    sudo rm -rfv "${cpcache_dir}"
-                  done
-                  # delete all .clerk directories
-                  find . -name .clerk | while read clerk_dir; do
-                    sudo rm -rfv "${clerk_dir}"
-                  done
-                  printf "${YELLOW}%s${RESET}\n" "local execute: cleanup... DONE"
-                else
-                  printf "${YELLOW}%s${RESET}\n" "It is not locally executed job. Nothing to do."
-                fi
+                set -x
+                ls -alh ~/code
+                cat ~/code/regular-file.txt
+                cat ~/code/lfs-file.ltxt
+
   common-executors:
     executors:
       # Alpine images:
@@ -307,38 +471,122 @@ orbs:
       docker_base_small:
         docker: [{image: "cimg/base:2023.12"}]
         resource_class: small
-      # Node images:
-      # - https://nodejs.dev/en/about/releases/
-      # - https://circleci.com/developer/images/image/cimg/node
-      # - https://hub.docker.com/r/cimg/node/tags
-      # - https://hub.docker.com/r/circleci/node/tags (obsolete)
-      docker_node_18_small:
-        docker: [{image: "cimg/node:18.19.0"}]
-        resource_class: small
-      # Clojure images:
-      # - https://circleci.com/developer/images/image/cimg/clojure
-      docker_clojure_small:
-        docker: [{image: "cimg/clojure:1.11.1"}]
-        resource_class: small
-  # https://circleci.com/developer/orbs/orb/rynkowsg/rynkowsg-orb?version=dev:alpha
-  # https://circleci.com/developer/orbs/orb/rynkowsg/rynkowsg-orb?version=dev:cfaac89513e7aa688983d413287812e95f765835
-  # https://circleci.com/developer/orbs/orb/rynkowsg/rynkowsg-orb?version=0.0.1
-#  rynkowsg-orb: rynkowsg/rynkowsg-orb@dev:6f88c7825c6c76983f57e18959ea748c4893fa00
 
 jobs:
-  custom_checkout:
-    executor: common-executors/docker_clojure_small
-    steps:
-      - common-commands/git_checkout: {lfs: true}
-
   typical_checkout:
-    executor: common-executors/docker_clojure_small
+    executor: common-executors/docker_base_small
     steps:
       - checkout
+      - common-commands/print_content
+
+  custom_checkout_v1:
+    executor: common-executors/docker_base_small
+    steps:
+      - common-commands/git_checkout:
+          lfs: true
+      - common-commands/print_content
+
+  custom_checkout_v2:
+    executor: common-executors/docker_base_small
+    steps:
+      - common-commands/clone_git_repo:
+          debug: true
+          lfs: true
+          name_displayed: "Checkout NEW"
+      - common-commands/print_content
+
+  test-clone-command:
+    executor: common-executors/docker_base_small
+    steps:
+      - checkout
+      - bats/install
+
+      # clone sample-repo-l2 - the simplest repo
+      - common-commands/clone_git_repo:
+          name_displayed: "clone_git_repo/sample-repo-l2"
+          debug: true
+          dest_dir: /tmp/sample-repo-l2
+          repo_url: "https://github.com/rynkowsg/rynkowsg-orb-sample-repo-l2.git"
+          repo_branch: "master"
+          # https://github.com/rynkowsg/rynkowsg-orb-sample-repo-l2/commit/64451475acc0db9d4cfc06b6ff1fd0dfc4c40939
+          repo_sha1: "64451475acc0db9d4cfc06b6ff1fd0dfc4c40939"
+      - run:
+          name: "test command: clone_git_repo/sample-repo-l2"
+          command: REPO_DIR=/tmp/sample-repo-l2 ./test/commands/clone_git_repo/check_clone_l2.bats
+
+      # clone sample-repo-l2 (lfs) - the repo with one LFS file
+      - common-commands/clone_git_repo:
+          name_displayed: "clone_git_repo/sample-repo-l2 (lfs)"
+          debug: true
+          dest_dir: /tmp/sample-repo-l2-lfs
+          lfs: true
+          repo_url: "https://github.com/rynkowsg/rynkowsg-orb-sample-repo-l2.git"
+          repo_branch: "master-lfs"
+          # https://github.com/rynkowsg/rynkowsg-orb-sample-repo-l2/commit/0ec9a71496402ad9383760f0e293efa6f7f95fad
+          repo_sha1: "0ec9a71496402ad9383760f0e293efa6f7f95fad"
+      - run:
+          name: "test command: clone_git_repo/sample-repo-l2 (lfs)"
+          command: REPO_DIR=/tmp/sample-repo-l2-lfs ./test/commands/clone_git_repo/check_clone_l2_lfs.bats
+
+#      # clone sample-repo-l1 - the repo with one submodule: a regular repo
+#      - common-commands/clone_git_repo:
+#          debug: true
+#          dest_dir: /tmp/sample-repo-l1
+#          repo_url: "https://github.com/rynkowsg/rynkowsg-orb-sample-repo-l1.git"
+#          repo_branch: "master"
+#          # https://github.com/rynkowsg/rynkowsg-orb-sample-repo-l1/commit/f44af4a9310cf6628c4ef134e49b59acafdb38eb
+#          repo_sha1: "f44af4a9310cf6628c4ef134e49b59acafdb38eb"
+#          submodules: true
+#      - run:
+#          name: "test command: clone_git_repo/sample-repo-l1"
+#          command: REPO_DIR=/tmp/sample-repo-l1 ./test/commands/clone_git_repo/check_clone_l1.bats
+#
+#      # clone sample-repo-l1 (lfs) - the repo with two submodules: a regular repo and LFS one
+#      - common-commands/clone_git_repo:
+#          debug: true
+#          dest_dir: /tmp/sample-repo-l1
+#          lfs: true
+#          repo_branch: "master-lfs"
+#          repo_url: "https://github.com/rynkowsg/rynkowsg-orb-sample-repo-l1.git"
+#          submodules: true
+#          # https://github.com/rynkowsg/rynkowsg-orb-sample-repo-l1/commit/4f6db90aecdd0ee0707668b34dbd5d1573986300
+#          repo_sha1: "4f6db90aecdd0ee0707668b34dbd5d1573986300"
+#      - run:
+#          name: "test command: clone_git_repo/sample-repo-l1 (lfs)"
+#          command: REPO_DIR=/tmp/sample-repo-l1-lfs ./test/commands/clone_git_repo/check_clone_l1_lfs.bats
+#
+#      # clone sample-repo-l0 - the repo with nested submodules - regular repos only
+#      - common-commands/clone_git_repo:
+#          debug: true
+#          dest_dir: /tmp/sample-repo-l0
+#          repo_url: "https://github.com/rynkowsg/rynkowsg-orb-sample-repo-l0.git"
+#          repo_branch: "master"
+#          # https://github.com/rynkowsg/rynkowsg-orb-sample-repo-l0/commit/22fd75655c084a283db06e488031bf07abe0660a
+#          repo_sha1: "22fd75655c084a283db06e488031bf07abe0660a"
+#          submodules: true
+#      - run:
+#          name: "test command: clone_git_repo/sample-repo-l0"
+#          command: REPO_DIR=/tmp/sample-repo-l0 ./test/commands/clone_git_repo/check_clone_l0.bats
+#
+#      # clone sample-repo-l0 (lfs) -the repo with nested submodules - both regular and LFS repos
+#      - common-commands/clone_git_repo:
+#          debug: true
+#          dest_dir: /tmp/sample-repo-l0
+#          lfs: true
+#          repo_branch: "master-lfs"
+#          repo_url: "https://github.com/rynkowsg/rynkowsg-orb-sample-repo-l0.git"
+#          submodules: true
+#          # https://github.com/rynkowsg/rynkowsg-orb-sample-repo-l0/commit/389d5d8f20413f96b4fc4634eca1eda02dc5d520
+#          repo_sha1: "389d5d8f20413f96b4fc4634eca1eda02dc5d520"
+#      - run:
+#          name: "test command: clone_git_repo/sample-repo-l0 (lfs)"
+#          command: REPO_DIR=/tmp/sample-repo-l0-lfs ./test/commands/clone_git_repo/check_clone_l0_lfs.bats
 
 
 workflows:
   testing-all:
     jobs:
-      - custom_checkout
       - typical_checkout
+      - custom_checkout_v1
+      - custom_checkout_v2
+      - test-clone-command
