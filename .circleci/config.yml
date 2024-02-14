@@ -456,9 +456,11 @@ orbs:
               name: Print PRE
               command: |
                 set -x
-                env
-                printenv
-                ls -alh ~/.ssh
+                env | sort
+                ls -alh ~
+                if [ -d ~/.ssh ]; then
+                  ls -alh ~/.ssh
+                fi
 
       print_post:
         parameters:
@@ -473,6 +475,11 @@ orbs:
                 PROJECT_DIR: <<parameters.project_dir>>
               command: |
                 set -x
+                env | sort
+                ls -alh ~
+                if [ -d ~/.ssh ]; then
+                  ls -alh ~/.ssh
+                fi
                 ls -alh "${PROJECT_DIR}"
                 cat "${PROJECT_DIR}/regular-file.txt"
                 cat "${PROJECT_DIR}/lfs-file.ltxt"
