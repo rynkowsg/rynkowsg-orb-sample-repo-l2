@@ -29,14 +29,16 @@ orbs:
                 LFS_ENABLED: <<parameters.lfs>>
                 SUBMODULES_ENABLED: <<parameters.submodules>>
               command: |
-                set -x
-                export GIT_TRACE=1
-              
-                ssh-add -l
-                ssh-add -L
-                ssh-agent
-                  
-                printenv | sort                
+                DEBUG=1
+                
+                if [ "${DEBUG}" = 1 ]; then
+                  set -x
+                  ssh-add -l
+                  ssh-add -L
+                  ssh-agent
+                  export GIT_TRACE=1
+                  printenv | sort
+                fi        
                 
                 YELLOW=$(printf '\033[33m')
                 RESET=$(printf '\033[m')
@@ -223,15 +225,16 @@ orbs:
                 #################################################
 
                 DEBUG=${DEBUG:-0}
-                [ "${DEBUG}" = 1 ] && set -x
-                export GIT_TRACE=1 
                 
-                ssh-add -l
-                ssh-add -L
-                ssh-agent
+                if [ "${DEBUG}" = 1 ]; then
+                  set -x
+                  ssh-add -l
+                  ssh-add -L
+                  ssh-agent
+                  export GIT_TRACE=1
+                  printenv | sort
+                fi
                 
-                printenv | sort
-
                 # Variables specified by CircleCI:
                 # - CHECKOUT_KEY - private key
                 # - CHECKOUT_KEY_PUBLIC - public key
@@ -310,6 +313,9 @@ orbs:
                 elif [ -n "${CHECKOUT_KEY:-}" ]; then
                   SSH_PRIVATE_KEY="${CHECKOUT_KEY:-}"
                   printf "%s\n" "- SSH_PRIVATE_KEY set to CHECKOUT_KEY"
+                elif ssh-add -l &>/dev/null; then
+                  printf "%s\n" "- detected ssh-agent has some keys already loaded:"
+                  ssh-add -l
                 else
                   printf "${RED}%s${NC}\n" "Private key not provided"
                   exit 1
@@ -327,6 +333,9 @@ orbs:
                 elif [ -n "${CHECKOUT_KEY_PUBLIC:-}" ]; then
                   SSH_PUBLIC_KEY="${CHECKOUT_KEY_PUBLIC:-}"
                   printf "%s\n" "- SSH_PUBLIC_KEY set to CHECKOUT_KEY_PUBLIC"
+                elif ssh-add -l &>/dev/null; then
+                  printf "%s\n" "- public key not provided, but identity already exist in the ssh-agent."
+                  ssh-add -l
                 else
                   printf "${RED}%s${NC}\n" "Public key not provided"
                   exit 1
