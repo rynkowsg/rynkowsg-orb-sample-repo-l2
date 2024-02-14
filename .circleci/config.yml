@@ -32,6 +32,10 @@ orbs:
                 set -x
                 export GIT_TRACE=1
               
+                ssh-add -l
+                ssh-add -L
+                ssh-agent
+                  
                 printenv | sort                
                 
                 YELLOW=$(printf '\033[33m')
@@ -221,6 +225,10 @@ orbs:
                 DEBUG=${DEBUG:-0}
                 [ "${DEBUG}" = 1 ] && set -x
                 export GIT_TRACE=1 
+                
+                ssh-add -l
+                ssh-add -L
+                ssh-agent
                 
                 printenv | sort
 
