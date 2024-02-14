@@ -1,0 +1,160 @@
+
+version: 2.1
+
+# Base images:
+# - https://circleci.com/developer/images/image/cimg/base
+# - https://hub.docker.com/r/cimg/base/tags
+docker_base_small: &docker_base_small
+  docker: [{ image: "cimg/base:2023.12" }]
+  resource_class: small
+
+orbs:
+  common-commands:
+    commands:
+      custom_checkout:
+        parameters:
+          lfs: { type: boolean, default: false }
+          submodules: { type: boolean, default: false }
+          dest: { type: string, default: "~/code" }
+        description: "Checkout GIT repository"
+        # We use commands 'git_checkout' instead of embedded 'checkout' because the latter doesn't
+        # work properly when you run CI jobs locally on your machine and a job uses repo with Git LFS.
+        # It looks the 'checkout' doesn't work exactly the same locally as it work in cloud.
+        # When run locally, it doesn't fetch the repo, just copy it and that causes the issue.
+        # To reproduce the issue, replace 'git_checkout' with 'checkout' and execute job locally.
+        # The issue: https://github.com/CircleCI-Public/circleci-cli/issues/644
+        # Similar issue: https://github.com/CircleCI-Public/circleci-cli/issues/330
+        steps:
+          - run:
+              name: "Checkout"
+              environment:
+                LFS_ENABLED: <<parameters.lfs>>
+                SUBMODULES_ENABLED: <<parameters.submodules>>
+              command: |
+                YELLOW=$(printf '\033[33m')
+                RESET=$(printf '\033[m')
+
+                function install_git_lfs {
+                  if ! which git-lfs > /dev/null; then
+                    printf "${YELLOW}%s${RESET}\n" "Installing Git LFS..."
+                    curl -sSL https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
+                    sudo apt-get install -y git-lfs
+                    printf "${YELLOW}%s${RESET}\n\n" "Installing Git LFS... DONE"
+                  fi
+                }
+
+                function setup_ssh {
+                  printf "${YELLOW}%s${RESET}\n" "Setting up SSH..."
+                  # --- create SSH dir
+                  export SSH_CONFIG_DIR="${HOME}/.ssh"
+                  printf "${YELLOW}%s${RESET}\n" "Setting up SSH... ${SSH_CONFIG_DIR}"
+                  mkdir -p "${SSH_CONFIG_DIR}"
+                  chmod 0700 "${SSH_CONFIG_DIR}"
+                  # --- create known_hosts
+                  printf "${YELLOW}%s${RESET}\n" "Setting up SSH... ${SSH_CONFIG_DIR}/known_hosts"
+                  # Current fingerprints: https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints
+                  printf "%s\n" "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" >> "${SSH_CONFIG_DIR}/known_hosts"
+                  printf "%s\n" "github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg=" >> "${SSH_CONFIG_DIR}/known_hosts"
+                  printf "%s\n" "github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4Ue1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBywINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zMjA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYirYgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk=" >> "${SSH_CONFIG_DIR}/known_hosts"
+                  # alternatively we could just use: ssh-keyscan -H github.com >> ~/.ssh/known_hosts
+                  chmod 0600 "${SSH_CONFIG_DIR}/known_hosts"
+                  # --- lay ground for keys setup
+                  PRIVATE_KEY_PATH="${SSH_CONFIG_DIR}/id"
+                  PUBLIC_KEY_PATH="${SSH_CONFIG_DIR}/id.pub"
+                  printf "${YELLOW}%s${RESET}\n" "Setting up SSH... ${PRIVATE_KEY_PATH}"
+                  # Note:
+                  # Usually CHECKOUT_KEY & CHECKOUT_KEY_PUBLIC are provided by CircleCI,
+                  # but in some cases when I want my own keys (e.g. I want to fetch multiple repos),
+                  # then it can by done by providing SSH_PRIVATE_KEY_B64 and SSH_PUBLIC_KEY_B64
+                  # --- create id_rsa
+                  rm -f "${PRIVATE_KEY_PATH}"
+                  if (: "${SSH_PRIVATE_KEY_B64?}") 2>/dev/null; then
+                    printf "${YELLOW}%s${RESET}\n" "- found env var SSH_PRIVATE_KEY_B64"
+                    CHECKOUT_KEY="$(echo "${SSH_PRIVATE_KEY_B64}" | base64 -d)"
+                  fi
+                  if (: "${CHECKOUT_KEY?}") 2>/dev/null; then
+                    printf "%s\n" "${CHECKOUT_KEY}" > "${PRIVATE_KEY_PATH}"
+                    chmod 0600 "${PRIVATE_KEY_PATH}"
+                  fi
+                  # --- create id_rsa.pub (optionally)
+                  printf "${YELLOW}%s${RESET}\n" "Setting up SSH... ${PUBLIC_KEY_PATH}"
+                  if (: "${SSH_PUBLIC_KEY_B64?}") 2>/dev/null; then
+                    printf "${YELLOW}%s${RESET}\n" "- found env var SSH_PUBLIC_KEY_B64"
+                    CHECKOUT_KEY_PUBLIC="$(echo "${SSH_PUBLIC_KEY_B64}" | base64 -d)"
+                  fi
+                  if (: "${CHECKOUT_KEY_PUBLIC?}") 2>/dev/null; then
+                    rm -f "${PUBLIC_KEY_PATH}"
+                    printf "%s" "${CHECKOUT_KEY_PUBLIC}" > "${PUBLIC_KEY_PATH}"
+                  fi
+                  # --- misc settings
+                  # If the private key was not established with the above code, lean back to default path.
+                  if [ ! -f "${PRIVATE_KEY_PATH}" ]; then
+                    PRIVATE_KEY_PATH="${SSH_CONFIG_DIR}/id_rsa"
+                  fi
+                  # point out the private key and known_hosts (alternative to use config file)
+                  export GIT_SSH_COMMAND="ssh -i \"${PRIVATE_KEY_PATH}\" -o UserKnownHostsFile=\"${SSH_CONFIG_DIR}/known_hosts\""
+                  # use git+ssh instead of https
+                  git config --global url."ssh://git@github.com".insteadOf "https://github.com" || true
+                  git config --global gc.auto 0 || true
+                  printf "${YELLOW}%s${RESET}\n" "Setting up SSH... DONE"
+                  printf "%s\n" ""
+                  # --- validate
+                  printf "${YELLOW}%s${RESET}\n" "Validating GitHub authentication..."
+                  ssh -T git@github.com || true
+                  printf "%s\n" ""
+                }
+
+                # $1 - dest
+                function repo_checkout {
+                  local -r dest="${1}"
+                  # To facilitate cloning shallow repo for branch, tag or particular sha,
+                  # we don't use `git clone`, but combination of `git init` & `git fetch`.
+                  printf "${YELLOW}%s${RESET}\n" "Creating clean git repo linked to ${CIRCLE_REPOSITORY_URL}..."
+                  rm -rf "${dest}"
+                  mkdir -p "${dest}"
+                  cd "${dest}"
+                  git config --global init.defaultBranch master
+                  git init
+                  git remote add origin "${CIRCLE_REPOSITORY_URL}"
+                  [ "${LFS_ENABLED}" = 1 ] && git lfs install
+                  printf "%s\n" ""
+                  if [ -n "${CIRCLE_TAG}" ]; then
+                    printf "${YELLOW}%s${RESET}\n" "Fetching & checking out tag..."
+                    git fetch --depth 1 origin "${CIRCLE_TAG}"
+                    git checkout --force "${CIRCLE_TAG}"
+                    git reset --hard "$CIRCLE_SHA1"
+                  else
+                    printf "${YELLOW}%s${RESET}\n" "Fetching & checking out branch..."
+                    git fetch --depth 1 origin "${CIRCLE_BRANCH}"
+                    git checkout --force -B "${CIRCLE_BRANCH}" "${CIRCLE_SHA1}"
+                  fi
+                  [ "${SUBMODULES_ENABLED}" = 1 ] && git submodule update --init --depth=1
+                  [ "${LFS_ENABLED}" = 1 ] && git lfs pull
+                  printf "%s\n" ""
+                  printf "${YELLOW}%s${RESET}\n" "Summary"
+                  git --no-pager log --no-color -n 1 --format="HEAD is now at %h %s"
+                }
+                # omit checkout when code already exist (e.g. mounted locally with -v param)
+                if [ ! -e "${HOME}/code/.git" ] ; then
+                  [ "${LFS_ENABLED}" = 1 ] && install_git_lfs
+                  setup_ssh
+                  repo_checkout <<parameters.dest>>
+                fi
+
+jobs:
+  typical_checkout:
+    <<: *docker_base_small # basically it is the same as `continuation/default`, but the `resource_class: small`
+    steps:
+      - checkout
+
+  custom_checkout:
+    <<: *docker_base_small # basically it is the same as `continuation/default`, but the `resource_class: small`
+    steps:
+      - common-commands/git_checkout: { lfs: true }
+
+workflows:
+  main:
+    jobs:
+      - typical_checkout
+      - custom_checkout
+
