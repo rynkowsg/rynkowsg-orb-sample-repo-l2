@@ -450,10 +450,20 @@ orbs:
                 else
                   main "$@"
                 fi
-      print_content:
+      print_pre:
+        steps:
+          - run:
+              name: Print PRE
+              command: |
+                set -x
+                env
+                printenv
+                ls -alh ~/.ssh
+
+      print_post:
         parameters:
           project_dir:
-            description: Project directory
+            description: Print POST
             type: string
             default: "~/code"
         steps:
@@ -485,33 +495,37 @@ jobs:
   typical_checkout:
     executor: common-executors/docker_base_small
     steps:
+      - common-commands/print_pre
       - checkout
-      - common-commands/print_content:
+      - common-commands/print_post:
           project_dir: "/home/circleci/project"
 
   custom_checkout_v1:
     executor: common-executors/docker_base_small
     steps:
+      - common-commands/print_pre
       - common-commands/git_checkout:
           lfs: true
           dest: "/home/circleci/project"
-      - common-commands/print_content:
+      - common-commands/print_post:
           project_dir: "/home/circleci/project"
 
   custom_checkout_v2:
     executor: common-executors/docker_base_small
     steps:
+      - common-commands/print_pre
       - common-commands/clone_git_repo:
           debug: true
           lfs: true
           name_displayed: "Checkout NEW"
           dest_dir: "/home/circleci/project"
-      - common-commands/print_content:
+      - common-commands/print_post:
           project_dir: "/home/circleci/project"
 
   test-clone-command:
     executor: common-executors/docker_base_small
     steps:
+      - common-commands/print_pre
       - checkout
       - bats/install
 
@@ -524,7 +538,7 @@ jobs:
           repo_branch: "master"
           # https://github.com/rynkowsg/rynkowsg-orb-sample-repo-l2/commit/64451475acc0db9d4cfc06b6ff1fd0dfc4c40939
           repo_sha1: "64451475acc0db9d4cfc06b6ff1fd0dfc4c40939"
-      - common-commands/print_content:
+      - common-commands/print_post:
           project_dir: "/tmp/sample-repo-l2"
 
       # clone sample-repo-l2 (lfs) - the repo with one LFS file
@@ -537,7 +551,7 @@ jobs:
           repo_branch: "master-lfs"
           # https://github.com/rynkowsg/rynkowsg-orb-sample-repo-l2/commit/0ec9a71496402ad9383760f0e293efa6f7f95fad
           repo_sha1: "0ec9a71496402ad9383760f0e293efa6f7f95fad"
-      - common-commands/print_content:
+      - common-commands/print_post:
           project_dir: "/tmp/sample-repo-l2-lfs"
 
 #      # clone sample-repo-l1 - the repo with one submodule: a regular repo
