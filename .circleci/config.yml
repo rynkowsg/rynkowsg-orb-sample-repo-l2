@@ -30,7 +30,10 @@ orbs:
                 SUBMODULES_ENABLED: <<parameters.submodules>>
               command: |
                 set -x
-                printenv
+                export GIT_TRACE=1
+              
+                printenv | sort                
+                
                 YELLOW=$(printf '\033[33m')
                 RESET=$(printf '\033[m')
 
@@ -92,7 +95,7 @@ orbs:
                     PRIVATE_KEY_PATH="${SSH_CONFIG_DIR}/id_rsa"
                   fi
                   # point out the private key and known_hosts (alternative to use config file)
-                  export GIT_SSH_COMMAND="ssh -i \"${PRIVATE_KEY_PATH}\" -o UserKnownHostsFile=\"${SSH_CONFIG_DIR}/known_hosts\""
+                  export GIT_SSH_COMMAND="ssh -v -i \"${PRIVATE_KEY_PATH}\" -o UserKnownHostsFile=\"${SSH_CONFIG_DIR}/known_hosts\""
                   # use git+ssh instead of https
                   git config --global url."ssh://git@github.com".insteadOf "https://github.com" || true
                   git config --global gc.auto 0 || true
@@ -217,8 +220,9 @@ orbs:
 
                 DEBUG=${DEBUG:-0}
                 [ "${DEBUG}" = 1 ] && set -x
+                export GIT_TRACE=1 
                 
-                printenv
+                printenv | sort
 
                 # Variables specified by CircleCI:
                 # - CHECKOUT_KEY - private key
@@ -378,7 +382,7 @@ orbs:
                   # use git+ssh instead of https
                 #  git config --global url."ssh://git@github.com".insteadOf "https://github.com" || true
                 #  git config --global gc.auto 0 || true
-                  printf "${GREEN}%s${NC}\n" "Setting up SSH... DONE"
+                  printf "${GREEN}%s${NC}\n" "Setting up SSH... DONE"F
                   printf "%s\n" ""
                   # --- validate
                   printf "${GREEN}%s${NC}\n" "Validating GitHub authentication..."
@@ -423,7 +427,7 @@ orbs:
                     exit 1
                   fi
                   [ "${SUBMODULES_ENABLED}" = 1 ] && git submodule update --init --recursive --depth=1
-                  [ "${LFS_ENABLED}" = 1 ] && GIT_TRACE=1 git lfs pull
+                  [ "${LFS_ENABLED}" = 1 ] && git lfs pull
                   printf "%s\n" ""
                   printf "${GREEN}%s${NC}\n" "Summary"
                   git --no-pager log --no-color -n 1 --format="HEAD is now at %h %s"
