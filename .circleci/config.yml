@@ -387,8 +387,6 @@ orbs:
                     printf "${GREEN}%s${NC}\n" "Setting up SSH... ${public_key_path}"
                     printf "%s" "${SSH_PUBLIC_KEY}" >"${public_key_path}"
                   fi
-                  eval "$(ssh-agent -s)"
-                  ssh-add "${SSH_CONFIG_DIR}/id_rsa"
                   # point out the private key and known_hosts (alternative to use config file)
                 #  git_ssh_command="$(printf "ssh%s%s" \
                 #    " -v" \
