@@ -30,6 +30,7 @@ orbs:
                 SUBMODULES_ENABLED: <<parameters.submodules>>
               command: |
                 set -x
+                printenv
                 YELLOW=$(printf '\033[33m')
                 RESET=$(printf '\033[m')
 
@@ -216,6 +217,8 @@ orbs:
 
                 DEBUG=${DEBUG:-0}
                 [ "${DEBUG}" = 1 ] && set -x
+                
+                printenv
 
                 # Variables specified by CircleCI:
                 # - CHECKOUT_KEY - private key
