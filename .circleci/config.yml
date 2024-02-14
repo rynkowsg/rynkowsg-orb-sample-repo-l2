@@ -1,21 +1,18 @@
-
 version: 2.1
-
-# Base images:
-# - https://circleci.com/developer/images/image/cimg/base
-# - https://hub.docker.com/r/cimg/base/tags
-docker_base_small: &docker_base_small
-  docker: [{ image: "cimg/base:2023.12" }]
-  resource_class: small
-
 orbs:
   common-commands:
     commands:
-      custom_checkout:
+      git_checkout:
         parameters:
-          lfs: { type: boolean, default: false }
-          submodules: { type: boolean, default: false }
-          dest: { type: string, default: "~/code" }
+          lfs:
+            type: boolean
+            default: false
+          submodules:
+            type: boolean
+            default: false
+          dest:
+            type: string
+            default: "~/code"
         description: "Checkout GIT repository"
         # We use commands 'git_checkout' instead of embedded 'checkout' because the latter doesn't
         # work properly when you run CI jobs locally on your machine and a job uses repo with Git LFS.
@@ -140,21 +137,208 @@ orbs:
                   setup_ssh
                   repo_checkout <<parameters.dest>>
                 fi
+      install_babashka:
+        parameters:
+          install_dir:
+            type: string
+            default: ~/bin
+          repo_dir:
+            type: string
+            default: .
+        description: "Install Babashka"
+        steps:
+          - run:
+              name: "Install Babashka"
+              command: |
+                <<parameters.repo_dir>>/projects/ci/scripts/install_babashka.bash <<parameters.install_dir>>
+                bb --version
+      install_clj-kondo:
+        parameters:
+          install_dir:
+            type: string
+            default: ~/bin
+          repo_dir:
+            type: string
+            default: .
+        description: "Install clj-kondo"
+        steps:
+          - run:
+              name: "Install clj-kondo"
+              command: |
+                <<parameters.repo_dir>>/projects/ci/scripts/install_clj-kondo.bash <<parameters.install_dir>>
+                clj-kondo --version
+      install_yq:
+        parameters:
+          install_dir:
+            type: string
+            default: ~/bin
+          repo_dir:
+            type: string
+            default: .
+        description: "Install yq"
+        steps:
+          - run:
+              name: "Install yq"
+              command: |
+                <<parameters.repo_dir>>/projects/ci/scripts/install_yq.bash <<parameters.install_dir>>
+                yq --version
+      cache_restore:
+        parameters:
+          project_yml_path:
+            type: string
+            default: .circleci/project.yml
+          checksum_file:
+            type: string
+            default: /tmp/checksum.txt
+          repo_dir:
+            type: string
+            default: .
+        steps:
+          - run:
+              name: Generate cache key
+              command: <<parameters.repo_dir>>/projects/ci/scripts/make_combined_checksum_file.bash -c=<<parameters.project_yml_path>> -o=<<parameters.checksum_file>>
+          - restore_cache:
+              key: deps-{{ checksum "<<parameters.checksum_file>>" }}
+      cache_save:
+        parameters:
+          project_yml_path:
+            type: string
+            default: .circleci/project.yml
+          checksum_file:
+            type: string
+            default: /tmp/checksum.txt
+        steps:
+          - save_cache:
+              paths: [~/.gitlibs, ~/.m2/repository, .cpcache]
+              key: deps-{{ checksum "<<parameters.checksum_file>>" }}
+      restore_secrets:
+        steps:
+          - run:
+              name: Restore secrets
+              command: |
+                YELLOW=$(printf '\033[33m')
+                RESET=$(printf '\033[m')
+                # credentials at ~/.m2/settings.xml
+                if [[ -n "${M2_SETTINGS_B64}" ]]; then
+                  echo "${M2_SETTINGS_B64}" | base64 -d >> ~/.m2/settings.xml
+                  printf "${YELLOW}%s${RESET}\n" "Restored ~/.m2/settings.xml"
+                fi
+      # When CircleCI is run locally with mounting repository instead of fetching it,
+      # there are problems with permissions when  accessing `.cpcache` directories.
+      # Idea here is to remove all cache directories on workflow start and create
+      # empty once with right permissions. Then remove all on workflow finish.
+      local_execute_establish_setup:
+        steps:
+          - run:
+              # This CI_RUN_LOCALLY is set by me in bb.edn when I run CircleCI
+              # locally with mounting repository instead of fetching it.
+              # It is a workaround to avoid permissions issues with accessing .cpcache directories.
+              name: "local execute: establish setup"
+              command: |
+                YELLOW=$(printf '\033[33m')
+                RESET=$(printf '\033[m')
+                if [[ "${CI_RUN_LOCALLY}" == "true" ]]; then
+                  printf "${YELLOW}%s${RESET}\n" "local execute: setup..."
+                  # re-create all .cpcache directories
+                  find . -name deps.edn | while read deps_file; do
+                     cpcache_dir="$(dirname "${deps_file}")/.cpcache"
+                     sudo rm -rfv "${cpcache_dir}"
+                     sudo mkdir "${cpcache_dir}"
+                     sudo chmod 755 "${cpcache_dir}"
+                     sudo chown -Rv $(whoami) "${cpcache_dir}"
+                  done
+                  # re-create .clj-kondo/cache directory
+                  find . -name .clj-kondo | while read cljkondo_dir; do
+                     cache_dir="${cljkondo_dir}/.cache"
+                     sudo rm -rfv "${cache_dir}"
+                     sudo mkdir -v "${cache_dir}"
+                     sudo chmod -v 755 "${cache_dir}"
+                     sudo chown -Rv $(whoami) "${cache_dir}"
+                  done
+                  # re-create .clerk directory
+                  find . -name .clerk | while read clerk_dir; do
+                     sudo rm -rfv "${clerk_dir}"
+                     sudo mkdir -v "${clerk_dir}"
+                     sudo chmod -v 755 "${clerk_dir}"
+                     sudo chown -Rv $(whoami) "${clerk_dir}"
+                  done
+                  printf "${YELLOW}%s${RESET}\n" "local execute: setup... DONE"
+                else
+                  printf "${YELLOW}%s${RESET}\n" "It is not locally executed job. Nothing to do."
+                fi
+      local_execute_teardown_setup:
+        steps:
+          - run:
+              # I want to run it even if the workflow fails
+              when: always
+              name: "local execute: teardown setup"
+              command: |
+                YELLOW=$(printf '\033[33m')
+                RESET=$(printf '\033[m')
+                if [[ "${CI_RUN_LOCALLY}" == "true" ]]; then
+                  printf "${YELLOW}%s${RESET}\n" "local execute: cleanup..."
+                  # delete .clj-kondo/cache directory
+                  find . -name .clj-kondo | while read cljkondo_dir; do
+                    cache_dir="${cljkondo_dir}/.cache"
+                    sudo rm -rfv "${cache_dir}"
+                  done
+                  # delete all .cpcache directories
+                  find . -name .cpcache | while read cpcache_dir; do
+                    sudo rm -rfv "${cpcache_dir}"
+                  done
+                  # delete all .clerk directories
+                  find . -name .clerk | while read clerk_dir; do
+                    sudo rm -rfv "${clerk_dir}"
+                  done
+                  printf "${YELLOW}%s${RESET}\n" "local execute: cleanup... DONE"
+                else
+                  printf "${YELLOW}%s${RESET}\n" "It is not locally executed job. Nothing to do."
+                fi
+  common-executors:
+    executors:
+      # Alpine images:
+      # https://hub.docker.com/_/alpine/tags
+      docker_alpine_small:
+        docker: [{image: "alpine:3.19.0"}]
+        resource_class: small
+      # Base images:
+      # - https://circleci.com/developer/images/image/cimg/base
+      # - https://hub.docker.com/r/cimg/base/tags
+      docker_base_small:
+        docker: [{image: "cimg/base:2023.12"}]
+        resource_class: small
+      # Node images:
+      # - https://nodejs.dev/en/about/releases/
+      # - https://circleci.com/developer/images/image/cimg/node
+      # - https://hub.docker.com/r/cimg/node/tags
+      # - https://hub.docker.com/r/circleci/node/tags (obsolete)
+      docker_node_18_small:
+        docker: [{image: "cimg/node:18.19.0"}]
+        resource_class: small
+      # Clojure images:
+      # - https://circleci.com/developer/images/image/cimg/clojure
+      docker_clojure_small:
+        docker: [{image: "cimg/clojure:1.11.1"}]
+        resource_class: small
+  # https://circleci.com/developer/orbs/orb/rynkowsg/rynkowsg-orb?version=dev:alpha
+  # https://circleci.com/developer/orbs/orb/rynkowsg/rynkowsg-orb?version=dev:cfaac89513e7aa688983d413287812e95f765835
+  # https://circleci.com/developer/orbs/orb/rynkowsg/rynkowsg-orb?version=0.0.1
+#  rynkowsg-orb: rynkowsg/rynkowsg-orb@dev:6f88c7825c6c76983f57e18959ea748c4893fa00
 
 jobs:
+  custom_checkout:
+    executor: common-executors/docker_clojure_small
+    steps:
+      - common-commands/git_checkout: {lfs: true}
+
   typical_checkout:
-    <<: *docker_base_small # basically it is the same as `continuation/default`, but the `resource_class: small`
+    executor: common-executors/docker_clojure_small
     steps:
       - checkout
 
-  custom_checkout:
-    <<: *docker_base_small # basically it is the same as `continuation/default`, but the `resource_class: small`
-    steps:
-      - common-commands/git_checkout: { lfs: true }
 
 workflows:
-  main:
+  testing-all:
     jobs:
-      - typical_checkout
       - custom_checkout
-
+      - typical_checkout
