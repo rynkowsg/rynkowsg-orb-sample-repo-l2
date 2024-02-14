@@ -447,16 +447,22 @@ orbs:
                 else
                   main "$@"
                 fi
-
       print_content:
+        parameters:
+          project_dir:
+            description: Project directory
+            type: string
+            default: "~/code"
         steps:
           - run:
               name: Print repo content
+              environment:
+                PROJECT_DIR: <<parameters.project_dir>>
               command: |
                 set -x
-                ls -alh ~/code
-                cat ~/code/regular-file.txt
-                cat ~/code/lfs-file.ltxt
+                ls -alh "${PROJECT_DIR}"
+                cat "${PROJECT_DIR}/regular-file.txt"
+                cat "${PROJECT_DIR}/lfs-file.ltxt"
 
   common-executors:
     executors:
@@ -477,14 +483,17 @@ jobs:
     executor: common-executors/docker_base_small
     steps:
       - checkout
-      - common-commands/print_content
+      - common-commands/print_content:
+          project_dir: "/home/circleci/project"
 
   custom_checkout_v1:
     executor: common-executors/docker_base_small
     steps:
       - common-commands/git_checkout:
           lfs: true
-      - common-commands/print_content
+          dest: "/home/circleci/project"
+      - common-commands/print_content:
+          project_dir: "/home/circleci/project"
 
   custom_checkout_v2:
     executor: common-executors/docker_base_small
@@ -493,7 +502,9 @@ jobs:
           debug: true
           lfs: true
           name_displayed: "Checkout NEW"
-      - common-commands/print_content
+          dest_dir: "/home/circleci/project"
+      - common-commands/print_content:
+          project_dir: "/home/circleci/project"
 
   test-clone-command:
     executor: common-executors/docker_base_small
@@ -510,9 +521,8 @@ jobs:
           repo_branch: "master"
           # https://github.com/rynkowsg/rynkowsg-orb-sample-repo-l2/commit/64451475acc0db9d4cfc06b6ff1fd0dfc4c40939
           repo_sha1: "64451475acc0db9d4cfc06b6ff1fd0dfc4c40939"
-      - run:
-          name: "test command: clone_git_repo/sample-repo-l2"
-          command: REPO_DIR=/tmp/sample-repo-l2 ./test/commands/clone_git_repo/check_clone_l2.bats
+      - common-commands/print_content:
+          project_dir: "/tmp/sample-repo-l2"
 
       # clone sample-repo-l2 (lfs) - the repo with one LFS file
       - common-commands/clone_git_repo:
@@ -524,9 +534,8 @@ jobs:
           repo_branch: "master-lfs"
           # https://github.com/rynkowsg/rynkowsg-orb-sample-repo-l2/commit/0ec9a71496402ad9383760f0e293efa6f7f95fad
           repo_sha1: "0ec9a71496402ad9383760f0e293efa6f7f95fad"
-      - run:
-          name: "test command: clone_git_repo/sample-repo-l2 (lfs)"
-          command: REPO_DIR=/tmp/sample-repo-l2-lfs ./test/commands/clone_git_repo/check_clone_l2_lfs.bats
+      - common-commands/print_content:
+          project_dir: "/tmp/sample-repo-l2-lfs"
 
 #      # clone sample-repo-l1 - the repo with one submodule: a regular repo
 #      - common-commands/clone_git_repo:
